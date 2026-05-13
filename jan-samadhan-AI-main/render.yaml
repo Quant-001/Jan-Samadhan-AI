@@ -1,0 +1,69 @@
+databases:
+  - name: jan-samadhan-db
+    plan: free
+    databaseName: jan_samadhan
+    user: jan_samadhan_user
+
+services:
+  - type: keyvalue
+    name: jan-samadhan-redis
+    plan: free
+    ipAllowList: []
+
+  - type: web
+    name: jan-samadhan-backend
+    runtime: python
+    rootDir: backend
+    plan: free
+    buildCommand: |
+      pip install -r requirements.txt
+      python manage.py collectstatic --noinput
+    preDeployCommand: |
+      python manage.py migrate --noinput &&
+      python manage.py seed &&
+      python manage.py train_local_ai_model
+    startCommand: |
+      python manage.py migrate --noinput &&
+      gunicorn config.wsgi:application --bind 0.0.0.0:$PORT --workers 2 --timeout 120
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.9
+      - key: DEBUG
+        value: "False"
+      - key: SECRET_KEY
+        generateValue: true
+      - key: ALLOWED_HOSTS
+        value: jan-samadhan-ai.onrender.com,jan-samadhan-backend.onrender.com,jansamadhan-ai.onrender.com
+      - key: CORS_ALLOWED_ORIGINS
+        value: https://jan-samadhan.vercel.app,https://jan-samadhan-ai-ten.vercel.app,https://jan-samadhan-2662b4e8l-joneshs-projects-7f614091.vercel.app,http://localhost:5173
+      - key: CORS_ALLOWED_ORIGIN_REGEXES
+        value: ^https://.*\.vercel\.app$
+      - key: CSRF_TRUSTED_ORIGINS
+        value: https://jan-samadhan.vercel.app,https://jan-samadhan-ai-ten.vercel.app,https://jan-samadhan-2662b4e8l-joneshs-projects-7f614091.vercel.app,https://*.vercel.app
+      - key: AXES_ENABLED
+        value: "True"
+      - key: FRONTEND_URL
+        value: https://jan-samadhan-ai-ten.vercel.app
+      - key: DB_SSLMODE
+        value: require
+      - key: DATABASE_URL
+        sync: false
+      - key: REDIS_URL
+        fromService:
+          type: keyvalue
+          name: jan-samadhan-redis
+          property: connectionString
+      - key: EMAIL_HOST_USER
+        sync: false
+      - key: EMAIL_HOST_PASSWORD
+        sync: false
+      - key: EMAIL_BACKEND
+        value: django.core.mail.backends.smtp.EmailBackend
+      - key: EMAIL_HOST
+        value: smtp.gmail.com
+      - key: EMAIL_PORT
+        value: "587"
+      - key: EMAIL_USE_TLS
+        value: "True"
+      - key: DEFAULT_FROM_EMAIL
+        sync: false
