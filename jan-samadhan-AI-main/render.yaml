@@ -44,10 +44,14 @@ services:
         value: "True"
       - key: FRONTEND_URL
         value: https://jan-samadhan-ai-ten.vercel.app
+      - key: OTP_FALLBACK_ENABLED
+        value: "True"
       - key: DB_SSLMODE
         value: require
       - key: DATABASE_URL
-        sync: false
+        fromDatabase:
+          name: jan-samadhan-db
+          property: connectionString
       - key: REDIS_URL
         fromService:
           type: keyvalue

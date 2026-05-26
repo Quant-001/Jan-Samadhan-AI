@@ -207,6 +207,9 @@ DEFAULT_FROM_EMAIL = os.getenv("DEFAULT_FROM_EMAIL") or EMAIL_HOST_USER or "nore
 FRONTEND_URL = os.getenv("FRONTEND_URL", "http://localhost:5173")
 EMAIL_VERIFICATION_REQUIRED = os.getenv("EMAIL_VERIFICATION_REQUIRED", "True") == "True"
 EMAIL_VERIFICATION_MAX_AGE_SECONDS = int(os.getenv("EMAIL_VERIFICATION_MAX_AGE_SECONDS", "172800"))
+LOGIN_OTP_MAX_AGE_SECONDS = int(os.getenv("LOGIN_OTP_MAX_AGE_SECONDS", "600"))
+COMPLAINT_OTP_MAX_AGE_SECONDS = int(os.getenv("COMPLAINT_OTP_MAX_AGE_SECONDS", "600"))
+OTP_FALLBACK_ENABLED = os.getenv("OTP_FALLBACK_ENABLED", "True" if DEBUG else "False") == "True"
 
 # --- Axes (Brute-force protection) ---
 AXES_ENABLED = os.getenv("AXES_ENABLED", "False" if DEBUG else "True") == "True"

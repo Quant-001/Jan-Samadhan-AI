@@ -2,12 +2,13 @@ import { useState } from "react";
 import { useNavigate, Link, useLocation } from "react-router-dom";
 import { authApi } from "../api";
 import toast from "react-hot-toast";
-import { UserPlus } from "lucide-react";
+import { Eye, EyeOff, UserPlus } from "lucide-react";
 
 export default function RegisterPage() {
   const [form, setForm] = useState({
     username: "", email: "", phone: "", first_name: "", last_name: "", password: "", password2: "",
   });
+  const [visiblePasswords, setVisiblePasswords] = useState({ password: false, password2: false });
   const [loading, setLoading] = useState(false);
   const navigate = useNavigate();
   const location = useLocation();
@@ -21,14 +22,16 @@ export default function RegisterPage() {
     setLoading(true);
     try {
       const { data } = await authApi.register(form);
-      toast.success(data?.detail || "Account created. Check your email for the OTP.");
+      const message = data?.detail || "Account created. Check your email for the OTP.";
+      if (data?.email_sent === false) toast.error(message);
+      else toast.success(message);
+      if (data?.otp_fallback) toast.success(`Use OTP ${data.otp_fallback}`, { duration: 10000 });
       navigate("/verify-email", {
         state: {
           from,
           verificationEmail: form.email,
-          verificationMessage: data?.email_sent
-            ? "OTP sent. Please check your inbox and enter the 6 digit code."
-            : "Account created. In local development, check the backend console for the OTP.",
+          verificationMessage: message,
+          otpFallback: data?.otp_fallback || "",
         },
       });
     } catch (err) {
@@ -40,19 +43,37 @@ export default function RegisterPage() {
     }
   };
 
-  const field = (name, label, type = "text", placeholder = "") => (
-    <div>
-      <label className="block text-sm font-medium text-gray-700 mb-1">{label}</label>
-      <input
-        className="input"
-        type={type}
-        value={form[name]}
-        onChange={(e) => setForm({ ...form, [name]: e.target.value })}
-        placeholder={placeholder}
-        required
-      />
-    </div>
-  );
+  const field = (name, label, type = "text", placeholder = "") => {
+    const isPassword = type === "password";
+    const visible = visiblePasswords[name];
+
+    return (
+      <div>
+        <label className="block text-sm font-medium text-gray-700 mb-1">{label}</label>
+        <div className="relative">
+          <input
+            className={`input ${isPassword ? "pr-11" : ""}`}
+            type={isPassword && visible ? "text" : type}
+            value={form[name]}
+            onChange={(e) => setForm({ ...form, [name]: e.target.value })}
+            placeholder={placeholder}
+            required
+          />
+          {isPassword && (
+            <button
+              type="button"
+              onClick={() => setVisiblePasswords((current) => ({ ...current, [name]: !current[name] }))}
+              className="absolute right-2 top-1/2 flex h-8 w-8 -translate-y-1/2 items-center justify-center rounded text-slate-500 hover:bg-slate-100 hover:text-slate-900 focus:outline-none focus:ring-2 focus:ring-cyan-500"
+              aria-label={visible ? `Hide ${label.toLowerCase()}` : `Show ${label.toLowerCase()}`}
+              title={visible ? `Hide ${label.toLowerCase()}` : `Show ${label.toLowerCase()}`}
+            >
+              {visible ? <EyeOff size={17} /> : <Eye size={17} />}
+            </button>
+          )}
+        </div>
+      </div>
+    );
+  };
 
   return (
     <div className="min-h-screen bg-[radial-gradient(circle_at_20%_20%,rgba(34,211,238,0.18),transparent_30%),linear-gradient(135deg,#f8fafc_0%,#e2e8f0_100%)]">

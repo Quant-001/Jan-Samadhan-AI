@@ -1,13 +1,15 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { complaintApi } from "../../api";
 import { PriorityBadge, StatusBadge, CategoryIcon, StatCard, LoadingSpinner, EmptyState } from "../../components/Shared";
+import VideoRecorder from "../../components/Shared/VideoRecorder";
+import AudioRecorder from "../../components/Shared/AudioRecorder";
 import { formatDate } from "../../utils/helpers";
 import { useAuth } from "../../hooks/useAuth";
 import { useLanguage } from "../../hooks/useLanguage";
 import toast from "react-hot-toast";
-import { CheckCircle2, MapPin, Mic, MicOff, Plus, ShieldCheck, Volume2, X } from "lucide-react";
+import { CheckCircle2, ExternalLink, Loader2, LocateFixed, MailCheck, MapPin, Mic, MicOff, Plus, RefreshCw, ShieldCheck, Volume2, X, Zap } from "lucide-react";
 
 const speechLanguageMap = {
   en: "en-IN",
@@ -73,6 +75,11 @@ export default function CitizenDashboard() {
   const [isListening, setIsListening] = useState(false);
   const [voiceTranscript, setVoiceTranscript] = useState("");
   const [voiceInterim, setVoiceInterim] = useState("");
+  const [complaintOtp, setComplaintOtp] = useState("");
+  const [complaintOtpSent, setComplaintOtpSent] = useState(false);
+  const [otpFallback, setOtpFallback] = useState("");
+  const [lastSubmittedComplaint, setLastSubmittedComplaint] = useState(null);
+  const [isLocating, setIsLocating] = useState(false);
   const emptyForm = {
     complainant_name: user?.first_name || "",
     complainant_email: user?.email || "",
@@ -81,7 +88,11 @@ export default function CitizenDashboard() {
     location: "",
     sector: "",
     pin_code: "",
+    latitude: "",
+    longitude: "",
     attachment: null,
+    video: null,
+    audio: null,
   };
   const [form, setForm] = useState(emptyForm);
 
@@ -92,12 +103,26 @@ export default function CitizenDashboard() {
 
   const complaints = data?.results || data || [];
 
+  const openComplaintForm = useCallback(() => {
+    setComplaintOtp("");
+    setComplaintOtpSent(false);
+    setOtpFallback("");
+    setShowForm(true);
+  }, []);
+
+  const closeComplaintForm = useCallback(() => {
+    setShowForm(false);
+    setComplaintOtp("");
+    setComplaintOtpSent(false);
+    setOtpFallback("");
+  }, []);
+
   useEffect(() => {
     if (searchParams.get("new") === "1") {
-      setShowForm(true);
+      openComplaintForm();
       setSearchParams({}, { replace: true });
     }
-  }, [searchParams, setSearchParams]);
+  }, [openComplaintForm, searchParams, setSearchParams]);
 
   useEffect(() => {
     return () => {
@@ -108,13 +133,31 @@ export default function CitizenDashboard() {
 
   const createMutation = useMutation({
     mutationFn: (fd) => complaintApi.create(fd),
-    onSuccess: () => {
+    onSuccess: (data) => {
       qc.invalidateQueries(["my-complaints"]);
-      toast.success(t("Complaint submitted! AI is classifying it now."));
-      setShowForm(false);
+      const ticketId = data?.data?.ticket_id || data?.ticket_id;
+      setLastSubmittedComplaint(data?.data || null);
+      const message = ticketId 
+        ? `Complaint submitted! Tracking ID: ${ticketId}` 
+        : "Complaint submitted! AI is classifying it now.";
+      toast.success(t(message), { duration: 10000 });
+      closeComplaintForm();
       setForm(emptyForm);
     },
     onError: (err) => toast.error(getApiErrorMessage(err, t("Submission failed"))),
+  });
+
+  const requestOtpMutation = useMutation({
+    mutationFn: () => complaintApi.requestOtp(),
+    onSuccess: (res) => {
+      setComplaintOtpSent(true);
+      setOtpFallback(res.data?.otp_fallback || "");
+      const message = t(res.data?.detail || "Complaint OTP sent to your registered email.");
+      if (res.data?.email_sent === false) toast.error(message);
+      else toast.success(message);
+      if (res.data?.otp_fallback) toast.success(`Use OTP ${res.data.otp_fallback}`, { duration: 10000 });
+    },
+    onError: (err) => toast.error(getApiErrorMessage(err, t("Could not send complaint OTP"))),
   });
 
   const handleSubmit = (e) => {
@@ -127,7 +170,12 @@ export default function CitizenDashboard() {
     fd.append("location", form.location);
     fd.append("sector", form.sector);
     fd.append("pin_code", form.pin_code);
+    if (form.latitude) fd.append("latitude", form.latitude);
+    if (form.longitude) fd.append("longitude", form.longitude);
+    fd.append("complaint_otp", complaintOtp);
     if (form.attachment) fd.append("attachment", form.attachment);
+    if (form.video) fd.append("attachment", form.video);
+    if (form.audio) fd.append("attachment", form.audio);
     createMutation.mutate(fd);
   };
 
@@ -186,9 +234,14 @@ export default function CitizenDashboard() {
 
     recognition.onerror = (event) => {
       setIsListening(false);
-      const message = event.error === "not-allowed"
-        ? t("Microphone permission was blocked.")
-        : t("Voice assistant stopped. Please try again.");
+      const errorMessages = {
+        "not-allowed": "Microphone permission was blocked. Allow microphone access from the browser address bar.",
+        "service-not-allowed": "Voice typing service is blocked in this browser. Try Chrome or Edge for speech-to-text.",
+        "no-speech": "No speech was detected. Please speak clearly after pressing Speak.",
+        "audio-capture": "No microphone was found. Check your microphone and browser permission.",
+        network: "Voice typing needs the browser speech service. Check internet access or try Chrome/Edge.",
+      };
+      const message = t(errorMessages[event.error] || "Voice assistant stopped. Please try again.");
       toast.error(message);
     };
 
@@ -197,7 +250,12 @@ export default function CitizenDashboard() {
       setVoiceInterim("");
     };
 
-    recognition.start();
+    try {
+      recognition.start();
+    } catch {
+      setIsListening(false);
+      toast.error(t("Voice assistant is already starting. Please wait a moment and try again."));
+    }
   };
 
   const stopVoiceAssistant = () => {
@@ -216,6 +274,83 @@ export default function CitizenDashboard() {
     );
     guide.lang = speechLanguageMap[language] || "en-IN";
     window.speechSynthesis.speak(guide);
+  };
+
+  const googleMapsUrl = form.latitude && form.longitude
+    ? `https://www.google.com/maps/search/?api=1&query=${form.latitude},${form.longitude}`
+    : "";
+  const googleMapsEmbedUrl = form.latitude && form.longitude
+    ? `https://maps.google.com/maps?q=${form.latitude},${form.longitude}&z=16&output=embed`
+    : "";
+
+  const useCurrentLocation = () => {
+    if (!navigator.geolocation) {
+      toast.error(t("GPS location is not supported in this browser."));
+      return;
+    }
+
+    setIsLocating(true);
+    const applyPosition = (position) => {
+      const latitude = position.coords.latitude.toFixed(6);
+      const longitude = position.coords.longitude.toFixed(6);
+      setForm((current) => ({
+        ...current,
+        latitude,
+        longitude,
+        location: current.location || `GPS location: ${latitude}, ${longitude}`,
+      }));
+      setIsLocating(false);
+      toast.success(t("GPS location added to the complaint."));
+    };
+
+    const handleLocationError = (error) => {
+      setIsLocating(false);
+      const messages = {
+        1: "Location permission was blocked. Click the location icon in the address bar and allow location access.",
+        2: "Current location is unavailable. Check device location services or enter latitude and longitude manually.",
+        3: "GPS took too long. Move near a window, enable device location, or enter coordinates manually.",
+      };
+      toast.error(t(messages[error.code] || "Could not access GPS location. Please allow location permission."));
+    };
+
+    navigator.geolocation.getCurrentPosition(
+      applyPosition,
+      handleLocationError,
+      { enableHighAccuracy: false, timeout: 20000, maximumAge: 300000 }
+    );
+  };
+
+  const watchCurrentLocation = () => {
+    if (!navigator.geolocation) {
+      toast.error(t("GPS location is not supported in this browser."));
+      return;
+    }
+
+    setIsLocating(true);
+    const watchId = navigator.geolocation.watchPosition(
+      (position) => {
+        const latitude = position.coords.latitude.toFixed(6);
+        const longitude = position.coords.longitude.toFixed(6);
+        setForm((current) => ({
+          ...current,
+          latitude,
+          longitude,
+          location: current.location || `GPS location: ${latitude}, ${longitude}`,
+        }));
+        setIsLocating(false);
+        navigator.geolocation.clearWatch(watchId);
+        toast.success(t("GPS location added to the complaint."));
+      },
+      (error) => {
+        setIsLocating(false);
+        navigator.geolocation.clearWatch(watchId);
+        const message = error.code === 1
+          ? "Location permission was blocked. Allow location from the browser address bar."
+          : "Could not capture live GPS. Enter latitude and longitude manually.";
+        toast.error(t(message));
+      },
+      { enableHighAccuracy: true, timeout: 30000, maximumAge: 0 }
+    );
   };
 
   const stats = [
@@ -238,7 +373,7 @@ export default function CitizenDashboard() {
             </p>
           )}
         </div>
-        <button onClick={() => setShowForm(true)} className="inline-flex items-center justify-center gap-2 rounded bg-cyan-400 px-5 py-3 text-sm font-black text-slate-950 hover:bg-cyan-300">
+        <button onClick={openComplaintForm} className="inline-flex items-center justify-center gap-2 rounded bg-cyan-400 px-5 py-3 text-sm font-black text-slate-950 hover:bg-cyan-300">
           <Plus size={16} /> {t("New Complaint")}
         </button>
       </div>
@@ -250,6 +385,25 @@ export default function CitizenDashboard() {
       {user && !user.is_verified && (
         <div className="mb-6 rounded border border-amber-200 bg-amber-50 p-4 text-sm font-semibold text-amber-900">
           {t("Please verify your email before submitting a complaint.")}
+        </div>
+      )}
+
+      {lastSubmittedComplaint?.ticket_id && (
+        <div className="mb-6 rounded border border-emerald-200 bg-emerald-50 p-4 text-emerald-950">
+          <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+            <div>
+              <p className="text-sm font-black">{t("Complaint submitted successfully")}</p>
+              <p className="mt-1 text-sm font-semibold">
+                {t("Tracking ID")}: <span className="font-mono">{lastSubmittedComplaint.ticket_id}</span>
+              </p>
+            </div>
+            <a
+              href={`/track?ticket=${encodeURIComponent(lastSubmittedComplaint.ticket_id)}`}
+              className="inline-flex items-center justify-center gap-2 rounded bg-emerald-700 px-4 py-2 text-sm font-black text-white hover:bg-emerald-800"
+            >
+              <ExternalLink size={15} /> {t("Track Complaint")}
+            </a>
+          </div>
         </div>
       )}
 
@@ -266,13 +420,32 @@ export default function CitizenDashboard() {
                 : "border-amber-300/40 bg-amber-300/10 text-amber-100"
             }`}>
               <ShieldCheck size={15} />
-              {user?.is_verified ? t("Email authenticated") : t("Email verification required")}
+              {user?.is_verified ? (
+                <span>{t("✓ Email authenticated")}</span>
+              ) : (
+                <span>{t("⚠ Email verification required")}</span>
+              )}
             </div>
           </div>
           <div className="p-6">
           <div className="flex items-center justify-between mb-4">
-            <button onClick={() => setShowForm(false)} className="p-1 hover:bg-gray-100 rounded"><X size={18} /></button>
+            <button onClick={closeComplaintForm} className="p-1 hover:bg-gray-100 rounded"><X size={18} /></button>
           </div>
+          
+          {!user?.is_verified && (
+            <div className="mb-4 rounded border border-amber-200 bg-amber-50 p-4">
+              <div className="flex gap-3">
+                <Zap className="text-amber-600 flex-shrink-0" size={20} />
+                <div>
+                  <p className="font-semibold text-amber-950">{t("Email Verification Required")}</p>
+                  <p className="text-sm text-amber-800 mt-1">
+                    {t("Your email must be verified to submit complaints. You will receive an OTP for verification.")}
+                  </p>
+                </div>
+              </div>
+            </div>
+          )}
+
           <form onSubmit={handleSubmit} className="space-y-4">
             <div className="rounded border border-slate-200 bg-slate-50 p-4">
               <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
@@ -308,8 +481,9 @@ export default function CitizenDashboard() {
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">{t("Email")}</label>
                 <input className="input" type="email" value={form.complainant_email}
-                  onChange={(e) => setForm({ ...form, complainant_email: e.target.value })}
+                  readOnly
                   placeholder={t("name@example.com")} required />
+                <p className="mt-1 text-xs font-semibold text-slate-500">{t("OTP and complaint updates go to this registered email.")}</p>
               </div>
             </div>
             <div>
@@ -366,12 +540,31 @@ export default function CitizenDashboard() {
             <div className="grid gap-3 md:grid-cols-3">
               <div className="md:col-span-3">
               <label className="block text-sm font-medium text-gray-700 mb-1">{t("Location / Address")}</label>
-              <div className="relative">
-                <MapPin size={16} className="absolute left-3 top-2.5 text-gray-400" />
-                <input className="input pl-9" value={form.location}
-                  onChange={(e) => setForm({ ...form, location: e.target.value })}
-                  placeholder={t("Ward no., area, city")} />
+              <div className="grid gap-2 md:grid-cols-[1fr_auto]">
+                <div className="relative">
+                  <MapPin size={16} className="absolute left-3 top-2.5 text-gray-400" />
+                  <input className="input pl-9" value={form.location}
+                    onChange={(e) => setForm({ ...form, location: e.target.value })}
+                    placeholder={t("Ward no., area, city")} />
+                </div>
+                <button
+                  type="button"
+                  onClick={useCurrentLocation}
+                  disabled={isLocating}
+                  className="inline-flex items-center justify-center gap-2 rounded bg-slate-950 px-4 py-2 text-sm font-black text-cyan-200 hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  {isLocating ? <Loader2 className="animate-spin" size={16} /> : <LocateFixed size={16} />}
+                  {isLocating ? t("Locating") : t("Use GPS")}
+                </button>
               </div>
+              <button
+                type="button"
+                onClick={watchCurrentLocation}
+                disabled={isLocating}
+                className="mt-2 inline-flex items-center gap-2 rounded border border-cyan-200 bg-white px-3 py-2 text-xs font-black text-slate-800 hover:border-cyan-500 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                <LocateFixed size={14} /> {t("Try live GPS")}
+              </button>
               </div>
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">{t("Sector / Ward")}</label>
@@ -385,17 +578,94 @@ export default function CitizenDashboard() {
                   onChange={(e) => setForm({ ...form, pin_code: e.target.value.replace(/\D/g, "").slice(0, 6) })}
                   placeholder="452001" required />
               </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">{t("Latitude")}</label>
+                <input className="input" inputMode="decimal" value={form.latitude}
+                  onChange={(e) => setForm({ ...form, latitude: e.target.value })}
+                  placeholder="22.719568" />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">{t("Longitude")}</label>
+                <input className="input" inputMode="decimal" value={form.longitude}
+                  onChange={(e) => setForm({ ...form, longitude: e.target.value })}
+                  placeholder="75.857727" />
+              </div>
             </div>
+
+            {googleMapsEmbedUrl && (
+              <div className="overflow-hidden rounded border border-slate-200 bg-slate-50">
+                <iframe
+                  title="Complaint GPS location on Google Maps"
+                  src={googleMapsEmbedUrl}
+                  className="h-56 w-full border-0"
+                  loading="lazy"
+                  referrerPolicy="no-referrer-when-downgrade"
+                />
+                <div className="flex flex-col gap-2 p-3 text-sm font-semibold text-slate-700 sm:flex-row sm:items-center sm:justify-between">
+                  <span>{t("GPS coordinates will be saved with this complaint.")}</span>
+                  <a href={googleMapsUrl} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-cyan-700 hover:underline">
+                    <ExternalLink size={15} /> {t("Open in Google Maps")}
+                  </a>
+                </div>
+              </div>
+            )}
+
+            <div className="grid gap-4 md:grid-cols-2">
+              <VideoRecorder onVideoCapture={(file) => setForm({ ...form, video: file })} />
+              <AudioRecorder onAudioCapture={(file) => setForm({ ...form, audio: file })} />
+            </div>
+
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">{t("Complaint File / Picture / Audio / Video")}</label>
               <input type="file" accept="image/*,video/*,audio/*,application/pdf" className="input text-sm"
                 onChange={(e) => setForm({ ...form, attachment: e.target.files[0] })} />
             </div>
+
+            <div className="rounded border border-cyan-100 bg-cyan-50 p-4">
+              <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+                <div>
+                  <p className="flex items-center gap-2 text-sm font-black text-slate-950">
+                    <MailCheck size={17} className="text-cyan-700" /> {t("Email OTP for complaint submission")}
+                  </p>
+                  <p className="mt-1 text-xs font-semibold text-slate-600">
+                    {complaintOtpSent
+                      ? t("Enter the 6 digit OTP sent to your registered email.")
+                      : t("Send an OTP to authenticate this complaint before submitting.")}
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => requestOtpMutation.mutate()}
+                  disabled={requestOtpMutation.isPending || !user?.is_verified}
+                  className="inline-flex items-center justify-center gap-2 rounded bg-slate-950 px-4 py-2 text-sm font-black text-cyan-200 hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  {requestOtpMutation.isPending ? <Loader2 className="animate-spin" size={16} /> : <RefreshCw size={16} />}
+                  {complaintOtpSent ? t("Resend OTP") : t("Send OTP")}
+                </button>
+              </div>
+              <div className="mt-3 max-w-xs">
+                <label className="block text-sm font-medium text-gray-700 mb-1">{t("Complaint OTP")}</label>
+                {otpFallback && (
+                  <div className="mb-2 rounded border border-amber-200 bg-amber-50 p-2 text-xs font-semibold text-amber-900">
+                    {t("Email delivery is not configured. Use OTP")} <span className="font-mono text-sm font-black">{otpFallback}</span>
+                  </div>
+                )}
+                <input
+                  className="input text-center font-mono text-lg tracking-[0.35em]"
+                  inputMode="numeric"
+                  maxLength={6}
+                  value={complaintOtp}
+                  onChange={(e) => setComplaintOtp(e.target.value.replace(/\D/g, "").slice(0, 6))}
+                  placeholder="000000"
+                  required
+                />
+              </div>
+            </div>
             <div className="flex gap-3">
-              <button type="submit" disabled={createMutation.isPending || !user?.is_verified} className="btn-primary">
+              <button type="submit" disabled={createMutation.isPending || !user?.is_verified || complaintOtp.length !== 6} className="btn-primary">
                 {createMutation.isPending ? t("Submitting...") : t("Submit Complaint")}
               </button>
-              <button type="button" onClick={() => setShowForm(false)} className="btn-secondary">{t("Cancel")}</button>
+              <button type="button" onClick={closeComplaintForm} className="btn-secondary">{t("Cancel")}</button>
             </div>
           </form>
           </div>
@@ -407,7 +677,7 @@ export default function CitizenDashboard() {
       ) : complaints.length === 0 ? (
         <EmptyState icon="📭" title={t("No complaints yet")}
           description={t("Submit your first complaint and we'll route it to the right department.")}
-          action={<button onClick={() => setShowForm(true)} className="btn-primary">{t("Submit Complaint")}</button>} />
+          action={<button onClick={openComplaintForm} className="btn-primary">{t("Submit Complaint")}</button>} />
       ) : (
         <div className="space-y-3">
           {complaints.map((c) => (
@@ -440,6 +710,7 @@ export default function CitizenDashboard() {
                     <div><span className="text-gray-400">{t("SLA Deadline")}:</span> <span className="font-medium">{formatDate(c.sla_deadline)}</span></div>
                     {c.officer_name && <div><span className="text-gray-400">{t("Officer")}:</span> <span className="font-medium">{c.officer_name}</span></div>}
                     {(c.sector || c.pin_code) && <div><span className="text-gray-400">{t("Area")}:</span> <span className="font-medium">{[c.sector, c.pin_code].filter(Boolean).join(" / ")}</span></div>}
+                    {(c.latitude && c.longitude) && <div><span className="text-gray-400">{t("GPS")}:</span> <a className="font-medium text-cyan-700 hover:underline" href={`https://www.google.com/maps/search/?api=1&query=${c.latitude},${c.longitude}`} target="_blank" rel="noreferrer">{c.latitude}, {c.longitude}</a></div>}
                   </div>
                   {c.routing_note && (
                     <div className="mt-3 rounded border border-teal-100 bg-teal-50 p-3 text-sm text-teal-900">

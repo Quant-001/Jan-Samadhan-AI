@@ -17,8 +17,12 @@ from .email_verification import (
     send_complaint_receipt_email,
     send_complaint_status_email,
     send_verification_email,
+    send_login_otp_email,
+    send_complaint_submission_otp_email,
     verify_email_otp,
     verify_email_token,
+    verify_login_otp,
+    verify_complaint_submission_otp,
 )
 from .models import User, Department, Complaint, ComplaintHistory, Notification
 from .routing import route_complaint_to_department_head
@@ -33,17 +37,199 @@ from .permissions import IsAdmin, IsOfficer, IsCitizen
 # ─── Auth ───────────────────────────────────────────────────────────────────
 
 
+def otp_delivery_detail(sent_detail, fallback_detail=None):
+    if fallback_detail is None:
+        fallback_detail = (
+            "OTP could not be sent by email because SMTP is not configured. "
+            "Configure EMAIL_HOST_USER and EMAIL_HOST_PASSWORD, then resend the OTP."
+        )
+    return {
+        "sent": sent_detail,
+        "fallback": fallback_detail,
+    }
+
+
+def dev_otp_payload(user, field_name):
+    if not getattr(settings, "OTP_FALLBACK_ENABLED", False):
+        return {}
+    otp = getattr(user, field_name, "")
+    if not otp:
+        return {}
+    return {
+        "otp_fallback": otp,
+        "otp_fallback_detail": "Email delivery is not configured, so use this OTP to continue.",
+    }
+
+
+def mask_email(email):
+    value = str(email or "").strip()
+    if "@" not in value:
+        return ""
+    local, domain = value.split("@", 1)
+    if len(local) <= 2:
+        masked_local = f"{local[:1]}***"
+    else:
+        masked_local = f"{local[:2]}***{local[-1:]}"
+    return f"{masked_local}@{domain}"
+
+
 class VerifiedTokenObtainPairSerializer(TokenObtainPairSerializer):
     def validate(self, attrs):
         data = super().validate(attrs)
         verification_required = getattr(settings, "EMAIL_VERIFICATION_REQUIRED", True)
         if verification_required and self.user.role == "CITIZEN" and not self.user.is_verified:
             raise AuthenticationFailed("Please verify your email before signing in.")
+        data["user"] = UserSerializer(self.user).data
         return data
 
 
 class VerifiedTokenObtainPairView(TokenObtainPairView):
     serializer_class = VerifiedTokenObtainPairSerializer
+
+
+class LoginRequestOTPView(APIView):
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        username = request.data.get("username", "").strip()
+        password = request.data.get("password", "").strip()
+
+        if not username or not password:
+            return Response(
+                {"detail": "Username and password are required."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        user = User.objects.filter(
+            Q(username__iexact=username) | Q(email__iexact=username),
+            is_active=True,
+        ).first()
+
+        if not user or not user.check_password(password):
+            return Response(
+                {"detail": "Invalid username or password."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        # Citizens require email verification
+        if user.role == "CITIZEN":
+            if not user.is_verified:
+                return Response(
+                    {
+                        "detail": "Please verify your email before signing in.",
+                        "email": user.email,
+                        "username": user.username,
+                    },
+                    status=status.HTTP_403_FORBIDDEN,
+                )
+            # Send OTP for citizens
+            email_sent = send_login_otp_email(user)
+            details = otp_delivery_detail("OTP sent to your registered email.")
+            return Response({
+                "detail": details["sent"] if email_sent else details["fallback"],
+                "email_sent": email_sent,
+                "user_id": user.id,
+                "username": user.username,
+                "email": user.email,
+                **dev_otp_payload(user, "login_otp"),
+            })
+        else:
+            # Officers and admins get regular login (no OTP required for them)
+            serializer = VerifiedTokenObtainPairSerializer(data={
+                "username": user.username,
+                "password": password,
+            })
+            if serializer.is_valid():
+                return Response(serializer.validated_data, status=status.HTTP_200_OK)
+            return Response(
+                serializer.errors,
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+
+class LoginVerifyOTPView(APIView):
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        user_id = request.data.get("user_id")
+        otp = request.data.get("otp", "").strip()
+
+        if not user_id or not otp:
+            return Response(
+                {"detail": "User ID and OTP are required."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        try:
+            user = User.objects.get(id=user_id, role="CITIZEN", is_active=True)
+        except User.DoesNotExist:
+            return Response(
+                {"detail": "User not found."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        try:
+            verify_login_otp(user, otp)
+        except ValueError as e:
+            return Response(
+                {"detail": str(e)},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        except signing.BadSignature:
+            return Response(
+                {"detail": "Invalid OTP. Please try again."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        except signing.SignatureExpired:
+            return Response(
+                {"detail": "OTP expired. Please request a new OTP."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        # Clear login OTP after successful verification
+        user.login_otp = ""
+        user.login_otp_created_at = None
+        user.save(update_fields=["login_otp", "login_otp_created_at"])
+
+        # Generate JWT tokens using TokenObtainPairSerializer
+        from rest_framework_simplejwt.tokens import RefreshToken
+        refresh = RefreshToken.for_user(user)
+        
+        return Response({
+            "access": str(refresh.access_token),
+            "refresh": str(refresh),
+            "detail": "Login successful.",
+            "user": UserSerializer(user).data,
+        })
+
+
+class ResendLoginOTPView(APIView):
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        user_id = request.data.get("user_id")
+
+        if not user_id:
+            return Response(
+                {"detail": "User ID is required."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        try:
+            user = User.objects.get(id=user_id, role="CITIZEN", is_active=True)
+        except User.DoesNotExist:
+            return Response(
+                {"detail": "User not found."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        email_sent = send_login_otp_email(user)
+        details = otp_delivery_detail("OTP sent to your email.")
+        return Response({
+            "detail": details["sent"] if email_sent else details["fallback"],
+            "email_sent": email_sent,
+            **dev_otp_payload(user, "login_otp"),
+        })
 
 
 class RegisterView(generics.CreateAPIView):
@@ -55,12 +241,20 @@ class RegisterView(generics.CreateAPIView):
         serializer.is_valid(raise_exception=True)
         user = serializer.save()
         email_sent = send_verification_email(user)
+        details = otp_delivery_detail(
+            "Account created. Please enter the OTP sent to your email before signing in.",
+            (
+                "Account created, but OTP email could not be sent because SMTP is not configured. "
+                "Configure EMAIL_HOST_USER and EMAIL_HOST_PASSWORD, then resend the OTP."
+            ),
+        )
         return Response(
             {
                 **serializer.data,
                 "email_verification_required": getattr(settings, "EMAIL_VERIFICATION_REQUIRED", True),
                 "email_sent": email_sent,
-                "detail": "Account created. Please enter the OTP sent to your email before signing in.",
+                "detail": details["sent"] if email_sent else details["fallback"],
+                **dev_otp_payload(user, "email_verification_otp"),
             },
             status=status.HTTP_201_CREATED,
         )
@@ -136,9 +330,11 @@ class ResendVerificationEmailView(APIView):
             return Response({"detail": "This email is already verified."})
 
         email_sent = send_verification_email(user)
+        details = otp_delivery_detail("Verification OTP sent. Please check your inbox.")
         return Response({
-            "detail": "Verification OTP sent. Please check your inbox.",
+            "detail": details["sent"] if email_sent else details["fallback"],
             "email_sent": email_sent,
+            **dev_otp_payload(user, "email_verification_otp"),
         })
 
 
@@ -194,6 +390,31 @@ class AdminDepartmentDetailView(generics.RetrieveUpdateDestroyAPIView):
 # ─── Citizen Complaints ─────────────────────────────────────────────────────
 
 
+class ComplaintRequestOTPView(APIView):
+    permission_classes = [IsAuthenticated, IsCitizen]
+
+    def post(self, request):
+        if getattr(settings, "EMAIL_VERIFICATION_REQUIRED", True) and not request.user.is_verified:
+            return Response(
+                {"detail": "Please verify your email before requesting a complaint OTP."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+        if not request.user.email:
+            return Response(
+                {"detail": "Your account does not have an email address."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        email_sent = send_complaint_submission_otp_email(request.user)
+        details = otp_delivery_detail("Complaint submission OTP sent to your registered email.")
+        return Response({
+            "detail": details["sent"] if email_sent else details["fallback"],
+            "email_sent": email_sent,
+            "email": request.user.email,
+            **dev_otp_payload(request.user, "complaint_submission_otp"),
+        })
+
+
 class CitizenComplaintListCreateView(generics.ListCreateAPIView):
     permission_classes = [IsAuthenticated, IsCitizen]
 
@@ -205,15 +426,37 @@ class CitizenComplaintListCreateView(generics.ListCreateAPIView):
     def get_queryset(self):
         return Complaint.objects.filter(citizen=self.request.user).prefetch_related("history")
 
+    def create(self, request, *args, **kwargs):
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        self.perform_create(serializer)
+        complaint = serializer.instance
+        return Response(
+            ComplaintSerializer(complaint, context=self.get_serializer_context()).data,
+            status=status.HTTP_201_CREATED,
+        )
+
     def perform_create(self, serializer):
         if getattr(settings, "EMAIL_VERIFICATION_REQUIRED", True) and not self.request.user.is_verified:
             raise PermissionDenied("Please verify your email before submitting a complaint.")
+        complaint_otp = self.request.data.get("complaint_otp")
+        try:
+            verify_complaint_submission_otp(self.request.user, complaint_otp)
+        except ValueError as exc:
+            raise PermissionDenied(str(exc))
+        except signing.SignatureExpired:
+            raise PermissionDenied("Complaint OTP expired. Please request a new OTP.")
+        except signing.BadSignature:
+            raise PermissionDenied("Invalid complaint OTP. Please check your email and try again.")
+
         complaint = serializer.save(citizen=self.request.user)
+        self.request.user.complaint_submission_otp = ""
+        self.request.user.complaint_submission_otp_created_at = None
+        self.request.user.save(update_fields=["complaint_submission_otp", "complaint_submission_otp_created_at"])
         _notify(complaint.citizen, complaint, "ASSIGNED",
                 "Complaint Received",
                 f"Your complaint #{complaint.ticket_id} has been submitted successfully.")
-        receipt_email = str(self.request.data.get("complainant_email") or self.request.user.email or "").strip()
-        send_complaint_receipt_email(complaint, receipt_email)
+        send_complaint_receipt_email(complaint, self.request.user.email)
         if complaint.status == "ASSIGNED":
             ComplaintHistory.objects.create(
                 complaint=complaint,
@@ -645,6 +888,7 @@ def track_complaint(request, ticket_id):
     return Response({
         "ticket_id": complaint.ticket_id,
         "title": complaint.title,
+        "complainant_email": mask_email(complaint.complainant_email or complaint.citizen.email),
         "status": complaint.status,
         "priority": complaint.priority,
         "category": complaint.category,

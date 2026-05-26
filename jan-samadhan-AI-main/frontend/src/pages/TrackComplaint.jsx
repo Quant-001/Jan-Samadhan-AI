@@ -1,24 +1,25 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { complaintApi } from "../api";
 import { StatusBadge, PriorityBadge } from "../components/Shared";
 import { formatDate } from "../utils/helpers";
-import { Link } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 import toast from "react-hot-toast";
 import ThemeLangToggle from "../components/Shared/ThemeLangToggle";
 import { useLanguage } from "../hooks/useLanguage";
 
 export default function TrackComplaint() {
   const { t } = useLanguage();
-  const [ticketId, setTicketId] = useState("");
+  const [searchParams] = useSearchParams();
+  const [ticketId, setTicketId] = useState(searchParams.get("ticket") || "");
   const [result, setResult] = useState(null);
   const [loading, setLoading] = useState(false);
 
-  const handleTrack = async (e) => {
-    e.preventDefault();
-    if (!ticketId.trim()) return;
+  const trackTicket = async (value) => {
+    const nextTicketId = value.trim();
+    if (!nextTicketId) return;
     setLoading(true);
     try {
-      const { data } = await complaintApi.track(ticketId.trim().toUpperCase());
+      const { data } = await complaintApi.track(nextTicketId.toUpperCase());
       setResult(data);
     } catch {
       toast.error(t("Ticket not found. Please check the ID."));
@@ -26,6 +27,16 @@ export default function TrackComplaint() {
     } finally {
       setLoading(false);
     }
+  };
+
+  useEffect(() => {
+    const ticket = searchParams.get("ticket");
+    if (ticket) trackTicket(ticket);
+  }, []);
+
+  const handleTrack = async (e) => {
+    e.preventDefault();
+    trackTicket(ticketId);
   };
 
   return (
@@ -75,6 +86,12 @@ export default function TrackComplaint() {
                   <p className="text-gray-400 text-xs dark:text-slate-500">{t("Department")}</p>
                   <p className="font-medium dark:text-slate-200">{result.department || t("Being assigned")}</p>
                 </div>
+                {result.complainant_email && (
+                  <div>
+                    <p className="text-gray-400 text-xs dark:text-slate-500">{t("Citizen Email")}</p>
+                    <p className="font-medium text-xs dark:text-slate-200">{result.complainant_email}</p>
+                  </div>
+                )}
                 <div>
                   <p className="text-gray-400 text-xs dark:text-slate-500">{t("SLA Deadline")}</p>
                   <p className={`font-medium text-xs ${result.is_sla_breached ? "text-red-600" : ""}`}>
