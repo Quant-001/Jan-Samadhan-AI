@@ -6,6 +6,9 @@ urlpatterns = [
     # Auth
     path("auth/register/", views.RegisterView.as_view()),
     path("auth/login/", views.VerifiedTokenObtainPairView.as_view()),
+    path("auth/login/request-otp/", views.LoginRequestOTPView.as_view()),
+    path("auth/login/verify-otp/", views.LoginVerifyOTPView.as_view()),
+    path("auth/login/resend-otp/", views.ResendLoginOTPView.as_view()),
     path("auth/refresh/", TokenRefreshView.as_view()),
     path("auth/me/", views.MeView.as_view()),
     path("auth/verify-email/", views.VerifyEmailView.as_view()),
@@ -17,6 +20,7 @@ urlpatterns = [
     path("departments/<int:pk>/", views.DepartmentDetailView.as_view()),
 
     # Citizen
+    path("complaints/request-otp/", views.ComplaintRequestOTPView.as_view()),
     path("complaints/", views.CitizenComplaintListCreateView.as_view()),
     path("complaints/<int:pk>/", views.CitizenComplaintDetailView.as_view()),
     path("complaints/<int:pk>/feedback/", views.CitizenFeedbackView.as_view()),

@@ -44,6 +44,9 @@ export default api;
 
 export const authApi = {
   login: (data) => api.post("/auth/login/", data),
+  requestLoginOtp: (data) => api.post("/auth/login/request-otp/", data),
+  verifyLoginOtp: (data) => api.post("/auth/login/verify-otp/", data),
+  resendLoginOtp: (data) => api.post("/auth/login/resend-otp/", data),
   register: (data) => api.post("/auth/register/", data),
   me: () => api.get("/auth/me/"),
   verifyEmail: (uidb64, token) => api.get(`/auth/verify-email/${uidb64}/${encodeURIComponent(token)}/`),
@@ -53,6 +56,7 @@ export const authApi = {
 
 export const complaintApi = {
   list: (params) => api.get("/complaints/", { params }),
+  requestOtp: () => api.post("/complaints/request-otp/"),
   create: (data) => api.post("/complaints/", data, {
     headers: { "Content-Type": "multipart/form-data" },
   }),

@@ -1,15 +1,15 @@
 {
   "model_type": "multinomial_naive_bayes",
   "version": 1,
-  "total_docs": 37,
-  "vocabulary_size": 152,
+  "total_docs": 34,
+  "vocabulary_size": 150,
   "categories": {
     "ELECTRICITY": {
-      "doc_count": 9,
-      "token_total": 69,
+      "doc_count": 6,
+      "token_total": 50,
       "token_counts": {
-        "power": 3,
-        "cut": 3,
+        "power": 1,
+        "cut": 1,
         "my": 2,
         "area": 1,
         "since": 1,
@@ -26,8 +26,8 @@
         "dangerous": 1,
         "street": 3,
         "light": 3,
-        "not": 4,
-        "working": 4,
+        "not": 2,
+        "working": 2,
         "near": 2,
         "house": 1,
         "bijli": 1,
@@ -39,10 +39,6 @@
         "spark": 1,
         "kar": 1,
         "raha": 1,
-        "electricity": 5,
-        "dfjdskdsfjfdasfdsj": 2,
-        "daly": 2,
-        "problem": 2,
         "voltage": 2,
         "fluctuation": 1,
         "locality": 1,
@@ -55,11 +51,11 @@
       }
     },
     "WATER": {
-      "doc_count": 6,
-      "token_total": 40,
+      "doc_count": 5,
+      "token_total": 33,
       "token_counts": {
         "no": 1,
-        "water": 9,
+        "water": 6,
         "supply": 3,
         "my": 1,
         "ward": 1,
@@ -75,12 +71,10 @@
         "bad": 1,
         "paani": 1,
         "ki": 1,
-        "pipe": 3,
+        "pipe": 1,
         "toot": 1,
         "gayi": 1,
         "hai": 1,
-        "leakege": 1,
-        "leakage": 1,
         "delay": 1,
         "starts": 1,
         "late": 1,
@@ -191,8 +185,8 @@
       }
     },
     "EDUCATION": {
-      "doc_count": 4,
-      "token_total": 15,
+      "doc_count": 5,
+      "token_total": 21,
       "token_counts": {
         "school": 1,
         "no": 1,
@@ -208,7 +202,11 @@
         "college": 1,
         "fee": 1,
         "refund": 1,
-        "pending": 1
+        "pending": 1,
+        "electricity": 1,
+        "thes": 2,
+        "s": 1,
+        "djdljdfljdfsjkjdsljdfjk": 2
       }
     },
     "OTHER": {

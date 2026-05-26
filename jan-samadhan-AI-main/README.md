@@ -764,7 +764,8 @@ http://localhost:8000
 4. Select this repository.
 5. Render will read `render.yaml`.
 6. Render creates the backend, Postgres database, and Key Value/Redis instance.
-7. Add email variables only if you want SMTP email:
+7. `DATABASE_URL` is populated automatically from the Render Postgres database in `render.yaml`. Do not override it with a manual Neon or external database URL unless you also update that database password and connection string.
+8. Add email variables only if you want SMTP email:
 
 ```text
 EMAIL_HOST_USER      optional

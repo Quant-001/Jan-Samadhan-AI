@@ -37,6 +37,10 @@ class User(AbstractUser):
     is_verified = models.BooleanField(default=False)
     email_verification_otp = models.CharField(max_length=6, blank=True)
     email_verification_otp_created_at = models.DateTimeField(null=True, blank=True)
+    login_otp = models.CharField(max_length=6, blank=True)
+    login_otp_created_at = models.DateTimeField(null=True, blank=True)
+    complaint_submission_otp = models.CharField(max_length=6, blank=True)
+    complaint_submission_otp_created_at = models.DateTimeField(null=True, blank=True)
 
     class Meta:
         verbose_name = "User"

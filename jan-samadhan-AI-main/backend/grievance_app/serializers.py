@@ -13,6 +13,8 @@ class RegisterSerializer(serializers.ModelSerializer):
         fields = ["username", "email", "phone", "password", "password2", "first_name", "last_name"]
 
     def validate(self, data):
+        data["email"] = data["email"].strip().lower()
+        data["username"] = data["username"].strip()
         if data["password"] != data["password2"]:
             raise serializers.ValidationError({"password": "Passwords do not match."})
         if User.objects.filter(email__iexact=data["email"]).exists():
@@ -114,14 +116,22 @@ class ComplaintCreateSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError("Enter a valid 6 digit PIN code.")
         return value
 
+    def validate(self, attrs):
+        request = self.context.get("request")
+        if request and request.user and request.user.is_authenticated:
+            registered_email = (request.user.email or "").strip().lower()
+            provided_email = (attrs.get("complainant_email") or "").strip().lower()
+            if provided_email and registered_email and provided_email != registered_email:
+                raise serializers.ValidationError({
+                    "complainant_email": "Complaint OTP and updates are sent only to your registered email."
+                })
+            attrs["complainant_email"] = registered_email
+        return attrs
+
     def create(self, validated_data):
         from .ai_service import classify_complaint
         from django.conf import settings
         from django.utils import timezone
-
-        request = self.context.get("request")
-        if request and not validated_data.get("complainant_email"):
-            validated_data["complainant_email"] = request.user.email
 
         text = validated_data["description"]
         ai_result = classify_complaint(text)
